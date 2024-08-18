@@ -1,40 +1,25 @@
 from flask import Flask, render_template, request, redirect, url_for
-import requests
+from dotenv import load_dotenv
 import os
+from utils import send_email, write_to_csv
+from models import db, Contact
 
+# Initialize Flask app
 app = Flask(__name__)
 
 # Load environment variables
-from dotenv import load_dotenv
 load_dotenv()
 
-# Get the API key and email from environment variables
-RESEND_API_KEY = os.getenv('RESEND_API_KEY')
-EMAIL_TO = os.getenv('EMAIL_TO')
+# Set up database configuration
+app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///contacts.db'
+app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
-def send_email(name, email, message):
-    url = "https://api.resend.com/emails"  # Example endpoint, adjust as needed
-    headers = {
-        "Authorization": f"Bearer {RESEND_API_KEY}",
-        "Content-Type": "application/json"
-    }
-    payload = {
-        "from": "onboarding@resend.dev",
-        "to": EMAIL_TO,
-        "subject": "Contact Form Submission",
-        "text": f"Name: {name}\nEmail: {email}\nMessage: {message}"
-    }
-    
-    try:
-        response = requests.post(url, headers=headers, json=payload)
-        if response.status_code == 200:
-            return True
-        else:
-            print(f"API error: {response.status_code} - {response.text}")
-            return False
-    except Exception as e:
-        print(f"Error sending email: {e}")
-        return False
+# Initialize the database with the app
+db.init_app(app)
+
+def create_tables():
+    with app.app_context():
+        db.create_all()
 
 @app.route('/')
 def home():
@@ -46,15 +31,23 @@ def contact():
     email = request.form['email']
     message = request.form['message']
     
-    if send_email(name, email, message):
-        return redirect(url_for('thank_you'))
-    else:
-        return "There was an error sending your message."
+    # Save to database
+    new_contact = Contact(name=name, email=email, message=message)
+    db.session.add(new_contact)
+    db.session.commit()
+    
+    # Write to CSV
+    write_to_csv(name, email, message)
 
-@app.route('/thanks')
+    # Send email
+    send_email(name, email, message)
+
+    return redirect(url_for('thank_you'))
+
+@app.route('/thank_you')
 def thank_you():
     return render_template('thanks.html')
 
 if __name__ == '__main__':
+    create_tables()  # Create tables when starting the app
     app.run(debug=True)
-
